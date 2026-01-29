@@ -1,8 +1,7 @@
-# B.py - AI 大腦 (V48: 智能解鎖版 - 找回 V41 的獲利爆發力)
+# B.py - AI 大腦 (V43: 邏輯校準版)
 import google.generativeai as genai
 import json
 import warnings
-import time
 import os
 from dotenv import load_dotenv
 
@@ -38,34 +37,30 @@ def ask_ai_for_signal(row, trend):
     global model
     
     # ==========================================
-    # 🔥 V48 底線防火牆 (Baseline Filters)
+    # 🔥 V43 核心防火牆 (同步 HTML 邏輯)
     # ==========================================
-    # 我們只保留「過濾垃圾」的底線，拆除「限制獲利」的上限
     
     rsi = row['RSI']
     adx = row['ADX']
     rvol = row['RVOL']
     ema_dist = row['EMA_DIST']
     
-    # 1. 保留趨勢底線 (ADX > 25)
-    # 這是過濾盤整盤最有效的工具，必須保留。
-    if adx < 25:
-        return {"action": "WAIT", "reason": f"🛑 硬體攔截: ADX {adx:.1f} 不足 25，趨勢不明顯"}
+    # 1. ADX 濾網 (同步 HTML: < 20 為死魚盤)
+    if adx < 20:
+        return {"action": "WAIT", "reason": f"🛑 V43 攔截: ADX {adx:.1f} < 20，強制盤整觀望"}
     
-    # 2. 保留量能底線 (RVOL > 0.8)
-    # 這是過濾假突破的工具，必須保留。
+    # 2. 量能底線 (保留 0.8 防止虛假波動)
     if rvol < 0.8:
-        return {"action": "WAIT", "reason": f"🛑 硬體攔截: RVOL {rvol:.2f} 縮量，缺乏動能"}
+        return {"action": "WAIT", "reason": f"🛑 V43 攔截: RVOL {rvol:.2f} 縮量，動能不足"}
     
-    # 3. 乖離率保護 (防止極端追高)
-    if abs(ema_dist) > 3.0: # 放寬到 3%，給大行情一點空間
-        return {"action": "WAIT", "reason": f"🛑 硬體攔截: 乖離率 {ema_dist:.1f}% 過極端，等待回歸"}
-
-    # ❌ 刪除了 RSI > 70 / < 30 的硬體攔截
-    # 讓 AI 決定是「過熱」還是「強勢噴發」
+    # 3. [修正] 乖離率防呆 (同步 HTML: 1.5% 警戒線)
+    # HTML 邏輯: if bias > 1.5 (15m) -> Wait
+    if abs(ema_dist) > 1.5: 
+        status = "超買" if ema_dist > 0 else "超賣"
+        return {"action": "WAIT", "reason": f"🛑 V43 攔截: 乖離率 {ema_dist:.1f}% ({status})，禁止追單"}
 
     # ==========================================
-    # 交給 AI 進行「強勢區」判斷
+    # 交給 AI 進行最終確認
     # ==========================================
     rotate_key()
     
@@ -75,38 +70,32 @@ def ask_ai_for_signal(row, trend):
     vol_state = "🔥 爆量" if rvol > 1.2 else "📈 放量"
 
     # RSI 狀態描述
-    if rsi > 70: rsi_state = "🔥 超買鈍化區 (強勢)"
-    elif rsi < 30: rsi_state = "❄️ 超賣鈍化區 (弱勢)"
+    if rsi > 70: rsi_state = "🔥 超買鈍化區"
+    elif rsi < 30: rsi_state = "❄️ 超賣鈍化區"
     else: rsi_state = "✅ 安全操作區"
 
     score_bull = row['SCORE_BULL']
     score_bear = row['SCORE_BEAR']
     
     prompt = f"""
-    你是 V48 頂尖交易員。我們移除了 RSI 的硬體限制，因為我們要抓到【主升段】的暴利。
-    請根據數據判斷現在是「強勢噴發」還是「頂部背離」。
+    你是 V43 戰情室的 AI 指揮官。所有硬體指標 (ADX, Bias, RVOL) 都已通過檢查。
+    現在請根據 Smart Score 和 RSI 進行最後的趨勢確認。
     
     【市場數據】
     1. 趨勢 (ADX): {adx:.1f} ({market_state})
     2. 動能 (RVOL): {rvol:.2f} ({vol_state})
     3. RSI: {rsi:.1f} ({rsi_state})
-    4. 乖離率: {ema_dist:.2f}%
+    4. 乖離率 (EMA50): {ema_dist:.2f}% (已在安全範圍內)
     
     【智能評分】
     多頭: {score_bull:.1f} / 空頭: {score_bear:.1f}
     
-    【決策邏輯】
-    1. **凱利過濾**：多空分數差距必須 > 15。
-    2. **超買區操作 (RSI > 70)**：
-       - 只有當 RVOL > 1.5 (爆量) 且 ADX 持續上升時，才允許追多 (視為強勢鈍化)。
-       - 否則視為過熱，回傳 WAIT。
-    3. **超賣區操作 (RSI < 30)**：
-       - 只有當 RVOL > 1.5 (爆量) 且 ADX 持續上升時，才允許追空 (視為崩盤)。
-       - 否則視為過冷，回傳 WAIT。
-    4. **安全區操作 (30-70)**：
-       - 正常依照分數與趨勢進場。
+    【V43 決策邏輯】
+    1. **順勢原則**：多頭分數高做多，空頭分數高做空。差距需 > 10。
+    2. **指標共振**：RSI 與分數方向必須一致。
+    3. **回傳格式**：嚴格使用 JSON。
     
-    回傳 JSON: {{"action": "BUY" | "SELL" | "WAIT", "reason": "分析原因 (針對 RSI 位置與量能配合)"}}
+    回傳 JSON: {{"action": "BUY" | "SELL" | "WAIT", "reason": "簡短原因"}}
     """
 
     max_retries = len(API_KEYS)
