@@ -1,10 +1,10 @@
-# A.py (V42: 乖離率與過熱保護版)
+# A.py (V43: 邏輯校準版)
 import ccxt
 import pandas as pd
 import pandas_ta as ta
 
 def get_market_data(symbol='BTC/USDT', timeframe='15m', limit=2000):
-    print(f"🔄 V42 系統: 下載 {symbol} 數據 (含 EMA乖離率 + 過熱偵測)...")
+    print(f"🔄 V43 系統: 下載 {symbol} 數據 (同步 HTML 邏輯)...")
     
     try:
         exchange = ccxt.binance()
@@ -26,14 +26,12 @@ def get_market_data(symbol='BTC/USDT', timeframe='15m', limit=2000):
         else:
             df['MACD_HIST'] = macd
 
-        # EMA 200
-        ema_result = df.ta.ema(length=200)
-        df['EMA_200'] = ema_result.iloc[:, 0] if isinstance(ema_result, pd.DataFrame) else ema_result
+        # [修正] HTML V43 使用的是 EMA 50，這裡必須同步
+        ema_result = df.ta.ema(length=50)
+        df['EMA_50'] = ema_result.iloc[:, 0] if isinstance(ema_result, pd.DataFrame) else ema_result
         
-        # 🔥【V42 新增】EMA 乖離率 (Distance from EMA)
-        # 計算公式: (收盤價 - EMA200) / EMA200 * 100
-        # 正值代表價格在均線上 X%，負值代表在均線下 X%
-        df['EMA_DIST'] = (df['close'] - df['EMA_200']) / df['EMA_200'] * 100
+        # [修正] EMA 乖離率計算 (基於 EMA 50)
+        df['EMA_DIST'] = (df['close'] - df['EMA_50']) / df['EMA_50'] * 100
 
         # VWAP & ATR
         vwap_result = df.ta.vwap()
@@ -49,16 +47,16 @@ def get_market_data(symbol='BTC/USDT', timeframe='15m', limit=2000):
         else:
             df['ADX'] = adx_df
 
-        # RVOL (油量)
+        # RVOL
         vol_sma = df.ta.sma(close=df['volume'], length=20)
         vol_sma = vol_sma.iloc[:, 0] if isinstance(vol_sma, pd.DataFrame) else vol_sma
         df['RVOL'] = df['volume'] / (vol_sma + 0.001)
 
-        # --- V39 智能分數 (保持不變) ---
+        # --- V43 智能分數 (邏輯同步) ---
         s_rsi_b = (df['RSI'] < 45).astype(int)
         s_rsi_s = (df['RSI'] > 55).astype(int)
-        s_ema_b = (df['close'] > df['EMA_200']).astype(int)
-        s_ema_s = (df['close'] < df['EMA_200']).astype(int)
+        s_ema_b = (df['close'] > df['EMA_50']).astype(int) # 同步使用 EMA 50
+        s_ema_s = (df['close'] < df['EMA_50']).astype(int)
         s_macd_b = (df['MACD_HIST'] > 0).astype(int)
         s_macd_s = (df['MACD_HIST'] < 0).astype(int)
         s_vwap_b = (df['close'] > df['VWAP']).astype(int)
