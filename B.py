@@ -1,4 +1,4 @@
-# B.py - AI 大腦 (V41: 車子與油邏輯)
+# B.py - AI 大腦 (V44: Python 硬體防火牆版)
 import google.generativeai as genai
 import json
 import warnings
@@ -6,21 +6,13 @@ import time
 import os
 from dotenv import load_dotenv
 
-# 🔥 強制指定 .env 路徑 (修復讀取不到的問題)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, ".env")
 load_dotenv(env_path)
 
-# ==========================================
-# 🔑 API KEY 池
-# ==========================================
 keys_str = os.getenv("GEMINI_KEYS")
-if not keys_str:
-    print(f"❌ 錯誤：在 {env_path} 找不到 GEMINI_KEYS")
-    raise ValueError("找不到 GEMINI_KEYS")
-
+if not keys_str: raise ValueError("找不到 GEMINI_KEYS")
 API_KEYS = [k.strip() for k in keys_str.split(',') if k.strip()]
-# ==========================================
 
 warnings.filterwarnings("ignore")
 current_key_index = 0
@@ -44,49 +36,64 @@ rotate_key()
 
 def ask_ai_for_signal(row, trend):
     global model
+    
+    # ==========================================
+    # 🔥 V44 硬體防火牆 (Hard-Coded Filters)
+    # ==========================================
+    # 我們不再依賴 AI 判斷數值，直接用 Python 強制執行紀律
+    
+    rsi = row['RSI']
+    adx = row['ADX']
+    rvol = row['RVOL']
+    ema_dist = row['EMA_DIST']
+    
+    # 1. 嚴格的 RSI 安全區 (35 ~ 65)
+    # 只要超出這個範圍，代表肉不多了，風險大於利潤，直接觀望
+    if rsi > 65: 
+        return {"action": "WAIT", "reason": f"🛑 硬體攔截: RSI {rsi:.1f} 過熱 (大於 65)，拒絕追多"}
+    if rsi < 35: 
+        return {"action": "WAIT", "reason": f"🛑 硬體攔截: RSI {rsi:.1f} 過冷 (小於 35)，拒絕追空"}
+
+    # 2. 嚴格的 ADX 門檻
+    if adx < 20:
+        return {"action": "WAIT", "reason": f"🛑 硬體攔截: ADX {adx:.1f} 過低，市場無方向 (死魚盤)"}
+    
+    # 3. 嚴格的乖離率保護
+    if abs(ema_dist) > 2.0:
+        return {"action": "WAIT", "reason": f"🛑 硬體攔截: 乖離率 {ema_dist:.1f}% 過大，等待回歸均線"}
+
+    # ==========================================
+    # 通過防火牆後，才呼叫 AI 進行「質化分析」
+    # ==========================================
     rotate_key()
     
-    # --- V41 新增邏輯：車子與油 ---
-    adx_val = row['ADX']
-    rvol = row['RVOL']
+    if adx > 50: market_state = "⚠️ 極度過熱"
+    elif adx > 25: market_state = "🚀 強烈趨勢"
+    else: market_state = "⚖️ 普通震盪"
     
-    market_state = "強烈趨勢" if adx_val > 25 else "盤整震盪"
-    
-    # 判斷油量狀態
-    if rvol > 1.2:
-        vol_state = "🔥 爆量 (動力充足)"
-    elif rvol < 0.8:
-        vol_state = "💤 縮量 (動力不足)"
-    else:
-        vol_state = "⚖️ 正常量"
+    vol_state = "🔥 爆量" if rvol > 1.2 else "⚖️ 正常"
 
     score_bull = row['SCORE_BULL']
     score_bear = row['SCORE_BEAR']
     
     prompt = f"""
-    你是 V41 高階量化交易員。請結合「趨勢(ADX)」與「動能(Volume)」進行決策：
+    你是 V44 頂尖交易員。我們已經通過了嚴格的數學濾網 (RSI 35-65, ADX>20)，現在需要你的【市場解讀能力】。
     
-    【市場環境分析】
-    1. 趨勢強度 (ADX): {adx_val:.1f} ({market_state}) -> 這代表車子的速度。
-    2. 量能動力 (RVOL): {rvol:.2f} ({vol_state}) -> 這代表車子的油量。
-       ⚠️ 警告: RVOL < 0.8 代表沒油了，就算指標有訊號，也極大機率是假突破 (插針)，請回傳 WAIT。
-       ⚠️ 提示: RVOL > 1.2 代表油量充足，若配合分數高，勝率極高。
+    【市場數據】
+    1. 趨勢 (ADX): {adx:.1f} ({market_state})
+    2. 動能 (RVOL): {rvol:.2f} ({vol_state})
+    3. RSI: {rsi:.1f} (目前處於安全操作區)
     
-    【V39 智能評分】
+    【智能評分】
     多頭: {score_bull:.1f} / 空頭: {score_bear:.1f}
     
-    【技術數據】
-    價格: {row['close']}
-    EMA200: {row['EMA_200']:.1f}
-    RSI: {row['RSI']:.1f}
-    MACD: {row['MACD_HIST']:.4f}
+    【決策任務】
+    請綜合判斷是否進場：
+    1. **量能確認**：RVOL 是否 > 0.8？如果是「爆量 (>1.2)」，則訊號可信度加倍。
+    2. **分數確認**：多空分數差距是否 > 15？
+    3. **趨勢確認**：ADX 是否支持目前的 EMA 方向？
     
-    【操作規則】
-    1. **嚴禁無量交易**：如果 RVOL < 0.8，除非分數高達 85 分以上，否則一律 WAIT。
-    2. **順勢而為**：當 ADX > 25 時，請嚴格遵守 EMA200 方向。
-    3. **凱利過濾**：多空分數差距需 > 15 分才考慮進場。
-    
-    回傳 JSON: {{"action": "BUY" | "SELL" | "WAIT", "reason": "分析原因 (請包含對 RVOL 量能的看法)"}}
+    回傳 JSON: {{"action": "BUY" | "SELL" | "WAIT", "reason": "簡短分析量能與趨勢結構"}}
     """
 
     max_retries = len(API_KEYS)

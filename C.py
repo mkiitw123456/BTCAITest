@@ -1,34 +1,31 @@
-# C.py - 回測模擬 (V41: 資金控管 + 完整修復版)
+# C.py - 回測模擬 (V43: JSON 輸出 + 資金控管版)
 from A import get_market_data
 from B import ask_ai_for_signal
 import time
 import requests
 import os
+import json # 👈 匯入 json 模組
 from dotenv import load_dotenv
 from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-# 🔥 強制指定 .env 路徑
+# 強制指定 .env 路徑
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, ".env")
 load_dotenv(env_path)
 
 # ==========================================
-# ⚙️ V41 參數設定
+# ⚙️ V43 參數設定
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
-if not DISCORD_WEBHOOK_URL:
-    print(Fore.YELLOW + "⚠️ 警告：未設定 Discord Webhook")
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m'
-DATA_LIMIT = 2000 # 建議跑多一點數據
+DATA_LIMIT = 2000 
 
 LEVERAGE = 20
 SCORE_THRESHOLD = 60 
-
-# 🔥 資金控管：每筆交易最大虧損限制 (本金的 2%)
 RISK_PER_TRADE = 0.02 
 
 INITIAL_BALANCE = 10000
@@ -38,28 +35,28 @@ SLEEP_TIME = 0.1
 balance = INITIAL_BALANCE
 position = None 
 trade_history = []
+loss_details = [] # 👈 用來儲存虧損單的詳細資料
 
 def send_discord(msg):
     if not DISCORD_WEBHOOK_URL: return
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg, "username": "V41 AI Trader"})
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg, "username": "V43 AI Trader"})
     except: pass
 
 def run_backtest():
-    global balance, position
+    global balance, position, loss_details
 
     df = get_market_data(SYMBOL, TIMEFRAME, DATA_LIMIT)
     if df.empty: return
 
-    print(f"\n🚀 V41 量價動能系統啟動 (Lv: {LEVERAGE}x)")
-    print(f"📊 設定: 風控 {RISK_PER_TRADE*100}% | 凱利分數 > {SCORE_THRESHOLD}")
+    print(f"\n🚀 V43 智能系統啟動 (Lv: {LEVERAGE}x)")
+    print(f"📊 設定: 風控 {RISK_PER_TRADE*100}% | 輸出: losing_trades.json")
     print("=" * 60)
     
-    send_discord(f"🚀 **V41 系統啟動**\n本金: {balance} U\n單筆風控: {RISK_PER_TRADE*100}%")
+    send_discord(f"🚀 **V43 回測啟動**\n本金: {balance} U\n策略: RSI安全區(35-65) + ADX過濾")
 
     last_price = 0
 
-    # 迴圈從 200 開始
     for i in range(200, len(df)):
         row = df.iloc[i]
         price = row['close']
@@ -101,7 +98,9 @@ def run_backtest():
                         'entry': price,
                         'sl': price - sl_dist,
                         'tp': price + tp_dist,
-                        'size': pos_size
+                        'size': pos_size,
+                        'reason': reason, # 👈 記住原因，之後輸出用
+                        'time': time_str
                     }
                     
                     msg = (
@@ -133,7 +132,9 @@ def run_backtest():
                         'entry': price,
                         'sl': price + sl_dist,
                         'tp': price - tp_dist,
-                        'size': pos_size
+                        'size': pos_size,
+                        'reason': reason,
+                        'time': time_str
                     }
                     
                     msg = (
@@ -163,17 +164,30 @@ def run_backtest():
             
             real_pnl = pos_size * raw_pnl * LEVERAGE
             
-            # 止損
+            # 🛑 止損 (LOSS)
             if (p_type == 'LONG' and price <= position['sl']) or \
                (p_type == 'SHORT' and price >= position['sl']):
                 balance += real_pnl
+                
                 msg = f"🛑 **{p_type} 止損**\n時間: {time_str}\n虧損: {real_pnl:.2f} U"
                 print(Fore.RED + msg)
                 send_discord(msg)
                 trade_history.append('LOSS')
+                
+                # 🔥 記錄虧損單到列表
+                loss_record = {
+                    "time": time_str,
+                    "type": p_type,
+                    "entry_price": entry_price,
+                    "exit_price": price,
+                    "loss_amount": real_pnl,
+                    "reason": position['reason']
+                }
+                loss_details.append(loss_record)
+                
                 position = None
 
-            # 止盈
+            # 💰 止盈 (WIN)
             elif (p_type == 'LONG' and price >= position['tp']) or \
                  (p_type == 'SHORT' and price <= position['tp']):
                 balance += real_pnl
@@ -194,10 +208,19 @@ def run_backtest():
         balance += final_pnl
         send_discord(f"🏁 **強制平倉**\n時間: {time_str}\n結算損益: {final_pnl:.2f} U")
 
-    end_msg = f"📊 **V41 結算**\n餘額: {balance:.2f} U\n淨利: {balance - INITIAL_BALANCE:.2f} U"
+    # 🔥 輸出 JSON 檔案
     print("="*60)
-    print(end_msg)
-    send_discord(end_msg)
+    print(f"📊 V43 結算 | 淨利: {balance - INITIAL_BALANCE:.2f} U")
+    
+    try:
+        with open('losing_trades.json', 'w', encoding='utf-8') as f:
+            json.dump(loss_details, f, indent=4, ensure_ascii=False)
+        print(Fore.CYAN + f"📁 已將 {len(loss_details)} 筆虧損紀錄寫入 'losing_trades.json'")
+    except Exception as e:
+        print(Fore.RED + f"❌ JSON 寫入失敗: {e}")
+
+    print("="*60)
+    send_discord(f"📊 **回測結束**\n最終餘額: {balance:.2f}")
 
 if __name__ == "__main__":
     run_backtest()

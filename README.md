@@ -1,0 +1,2 @@
+pull下來後先確定電腦有裝python
+然後用vscode打開直接在終端機打python C.py就會運作了
