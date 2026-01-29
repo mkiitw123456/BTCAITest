@@ -1,16 +1,15 @@
-# C.py - 回測模擬 (V43: JSON 輸出 + 資金控管版)
+# C.py - 回測模擬 (V43: 動態盈虧比邏輯校準版)
 from A import get_market_data
 from B import ask_ai_for_signal
 import time
 import requests
 import os
-import json # 👈 匯入 json 模組
+import json
 from dotenv import load_dotenv
 from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-# 強制指定 .env 路徑
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, ".env")
 load_dotenv(env_path)
@@ -25,7 +24,7 @@ TIMEFRAME = '15m'
 DATA_LIMIT = 2000 
 
 LEVERAGE = 20
-SCORE_THRESHOLD = 60 
+SCORE_THRESHOLD = 55 # 同步 HTML 的 50+ 稍微嚴格一點
 RISK_PER_TRADE = 0.02 
 
 INITIAL_BALANCE = 10000
@@ -35,12 +34,12 @@ SLEEP_TIME = 0.1
 balance = INITIAL_BALANCE
 position = None 
 trade_history = []
-loss_details = [] # 👈 用來儲存虧損單的詳細資料
+loss_details = []
 
 def send_discord(msg):
     if not DISCORD_WEBHOOK_URL: return
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg, "username": "V43 AI Trader"})
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg, "username": "V43 AI Commander"})
     except: pass
 
 def run_backtest():
@@ -49,11 +48,11 @@ def run_backtest():
     df = get_market_data(SYMBOL, TIMEFRAME, DATA_LIMIT)
     if df.empty: return
 
-    print(f"\n🚀 V43 智能系統啟動 (Lv: {LEVERAGE}x)")
-    print(f"📊 設定: 風控 {RISK_PER_TRADE*100}% | 輸出: losing_trades.json")
+    print(f"\n🚀 V43 自動戰巡系統啟動 (Lv: {LEVERAGE}x)")
+    print(f"📊 邏輯: 乖離防呆(1.5%) + 動態盈虧比 + ADX濾網")
     print("=" * 60)
     
-    send_discord(f"🚀 **V46 動態區間解鎖版**\n本金: {balance} U\n策略: RSI安全區(35-65) + ADX過濾")
+    send_discord(f"🚀 **V43 乖離防呆版** 啟動\n本金: {balance} U")
 
     last_price = 0
 
@@ -65,6 +64,7 @@ def run_backtest():
         time_str = str(ts)
         
         atr = row['ATR']
+        adx = row['ADX'] # 獲取 ADX 用於動態 TP
         bull_score = row['SCORE_BULL']
         bear_score = row['SCORE_BEAR']
         
@@ -75,16 +75,27 @@ def run_backtest():
             
             if is_bullish or is_bearish:
                 
-                print(f"[{time_str}] 🔍 機會: 多{bull_score:.0f} vs 空{bear_score:.0f} -> ", end="")
+                print(f"[{time_str}] 🔍 掃描: 多{bull_score:.0f} vs 空{bear_score:.0f} (ADX:{adx:.1f}) -> ", end="")
                 
                 decision = ask_ai_for_signal(row, [])
                 action = decision.get('action', 'WAIT')
                 reason = decision.get('reason', 'N/A')
 
+                # [修正] V43 動態盈虧比邏輯 (Dynamic Risk Reward)
+                # 趨勢盤(ADX>25)貪婪，震盪盤(20<ADX<25)保守
+                if adx > 25:
+                    tp_mult = 3.0
+                    sl_mult = 1.5
+                    mode_str = "趨勢模式"
+                else:
+                    tp_mult = 1.2
+                    sl_mult = 1.0
+                    mode_str = "震盪模式"
+
                 # === 進場邏輯 (BUY) ===
                 if action == "BUY":
-                    sl_dist = atr * 1.5
-                    tp_dist = atr * 2.0
+                    sl_dist = atr * sl_mult
+                    tp_dist = atr * tp_mult
                     
                     sl_percent = sl_dist / price 
                     risk_with_leverage = sl_percent * LEVERAGE
@@ -99,17 +110,17 @@ def run_backtest():
                         'sl': price - sl_dist,
                         'tp': price + tp_dist,
                         'size': pos_size,
-                        'reason': reason, # 👈 記住原因，之後輸出用
-                        'time': time_str
+                        'reason': reason,
+                        'time': time_str,
+                        'mode': mode_str
                     }
                     
                     msg = (
-                        f"📈 **AI 開多 (LONG)**\n"
+                        f"📈 **AI 開多 (LONG)** [{mode_str}]\n"
                         f"🕒 時間: {time_str}\n"
                         f"💵 進場價: {price:.2f}\n"
-                        f"💰 倉位大小: {pos_size:.2f} U\n"
-                        f"🛡️ 止損: {price-sl_dist:.2f}\n"
-                        f"🎯 止盈: {price+tp_dist:.2f}\n"
+                        f"🛡️ 止損: {price-sl_dist:.2f} (-{sl_mult} ATR)\n"
+                        f"🎯 止盈: {price+tp_dist:.2f} (+{tp_mult} ATR)\n"
                         f"📝 原因: {reason}"
                     )
                     print(Fore.GREEN + f"\n{msg}")
@@ -117,8 +128,8 @@ def run_backtest():
 
                 # === 進場邏輯 (SELL) ===
                 elif action == "SELL":
-                    sl_dist = atr * 1.5
-                    tp_dist = atr * 2.0
+                    sl_dist = atr * sl_mult
+                    tp_dist = atr * tp_mult
                     
                     sl_percent = sl_dist / price
                     risk_with_leverage = sl_percent * LEVERAGE
@@ -134,22 +145,22 @@ def run_backtest():
                         'tp': price - tp_dist,
                         'size': pos_size,
                         'reason': reason,
-                        'time': time_str
+                        'time': time_str,
+                        'mode': mode_str
                     }
                     
                     msg = (
-                        f"📉 **AI 開空 (SHORT)**\n"
+                        f"📉 **AI 開空 (SHORT)** [{mode_str}]\n"
                         f"🕒 時間: {time_str}\n"
                         f"💵 進場價: {price:.2f}\n"
-                        f"💰 倉位大小: {pos_size:.2f} U\n"
-                        f"🛡️ 止損: {price+sl_dist:.2f}\n"
-                        f"🎯 止盈: {price-tp_dist:.2f}\n"
+                        f"🛡️ 止損: {price+sl_dist:.2f} (-{sl_mult} ATR)\n"
+                        f"🎯 止盈: {price-tp_dist:.2f} (+{tp_mult} ATR)\n"
                         f"📝 原因: {reason}"
                     )
                     print(Fore.RED + f"\n{msg}")
                     send_discord(msg)
                 else:
-                    print(Fore.YELLOW + "AI 否決 (Wait)")
+                    print(Fore.YELLOW + f"AI 否決: {reason}")
                 
                 time.sleep(SLEEP_TIME)
 
@@ -174,14 +185,14 @@ def run_backtest():
                 send_discord(msg)
                 trade_history.append('LOSS')
                 
-                # 🔥 記錄虧損單到列表
                 loss_record = {
                     "time": time_str,
                     "type": p_type,
                     "entry_price": entry_price,
                     "exit_price": price,
                     "loss_amount": real_pnl,
-                    "reason": position['reason']
+                    "reason": position['reason'],
+                    "mode": position['mode']
                 }
                 loss_details.append(loss_record)
                 
@@ -208,7 +219,6 @@ def run_backtest():
         balance += final_pnl
         send_discord(f"🏁 **強制平倉**\n時間: {time_str}\n結算損益: {final_pnl:.2f} U")
 
-    # 🔥 輸出 JSON 檔案
     print("="*60)
     print(f"📊 V43 結算 | 淨利: {balance - INITIAL_BALANCE:.2f} U")
     
